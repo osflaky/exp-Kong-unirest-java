@@ -1,0 +1,260 @@
+/**
+ * The MIT License
+ *
+ * Copyright for portions of unirest-java are held by Kong Inc (c) 2013.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files (the
+ * "Software"), to deal in the Software without restriction, including
+ * without limitation the rights to use, copy, modify, merge, publish,
+ * distribute, sublicense, and/or sell copies of the Software, and to
+ * permit persons to whom the Software is furnished to do so, subject to
+ * the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+ * LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+ * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+ * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
+package BehaviorTests;
+
+import tools.jackson.databind.DeserializationFeature;
+import com.google.gson.Gson;
+import kong.unirest.core.*;
+import kong.unirest.modules.gson.GsonObjectMapper;
+import org.junit.jupiter.api.Test;
+import tools.jackson.databind.json.JsonMapper;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.*;
+
+class AsObjectTest extends BddTest {
+
+    @Test
+    void basicJsonObjectMapperIsTheDefault() {
+        Unirest.config().reset(true);
+        assertThat(Unirest.config().getObjectMapper())
+                .isInstanceOf(GsonObjectMapper.class);
+    }
+
+    @Test
+    void basicJsonObjectMapperIsGoodEnough() {
+        Unirest.config().reset(true);
+        MockServer.setJsonAsResponse(new Foo("bar"));
+
+        Foo f = Unirest.get(MockServer.GET)
+                .asObject(Foo.class)
+                .getBody();
+
+        assertEquals("bar", f.bar);
+    }
+
+    @Test
+    void whenNoBodyIsReturned() {
+        var i = Unirest.get(MockServer.NOBODY).asObject(RequestCapture.class);
+
+        assertEquals(200, i.getStatus());
+        assertNull(i.getBody());
+    }
+
+    @Test
+    void canGetObjectResponse() {
+         Unirest.get(MockServer.GET)
+                .queryString("foo", "bar")
+                .asObject(RequestCapture.class)
+                .getBody()
+                .assertParam("foo", "bar");
+    }
+
+    @Test
+    void canGetObjectResponseAsync() throws Exception {
+        Unirest.get(MockServer.GET)
+                .queryString("foo", "bar")
+                .asObjectAsync(RequestCapture.class)
+                .get()
+                .getBody()
+                .assertParam("foo", "bar");
+    }
+
+    @Test
+    void canGetObjectResponseAsyncWithCallback() {
+        Unirest.get(MockServer.GET)
+                .queryString("foo", "bar")
+                .asObjectAsync(RequestCapture.class, r -> {
+                    RequestCapture cap = r.getBody();
+                    cap.assertParam("foo", "bar");
+                    asyncSuccess();
+                });
+
+        assertAsync();
+    }
+
+    @Test
+    void canPassAnObjectMapperAsPartOfARequest(){
+        Unirest.config().setObjectMapper(null);
+
+        var mapper = new TestingMapper();
+        Unirest.post(MockServer.POST)
+                .queryString("foo", "bar")
+                .withObjectMapper(mapper)
+                .body(new Foo("Hello World"))
+                .asObject(RequestCapture.class)
+                .ifFailure(e -> {
+                    UnirestParsingException ex = e.getParsingError().get();
+                    ex.printStackTrace();
+                    throw new RuntimeException(ex.getMessage());
+                })
+                .getBody()
+                .assertParam("foo", "bar")
+                .assertBody("{\"bar\":\"Hello World\"}");
+
+        assertTrue(mapper.readWasCalled);
+        assertTrue(mapper.writeWasCalled);
+    }
+
+    @Test
+    void canOverrideBody() {
+        Unirest.post(MockServer.POST)
+                .body(new Foo("Apple"))
+                .body(new Foo("Orange"))
+                .asObject(RequestCapture.class)
+                .getBody()
+                .assertBody("{\"bar\":\"Orange\"}");
+    }
+
+    @Test
+    void setCharSetAfterBody() {
+        Unirest.post(MockServer.POST)
+                .body(new Foo("Orange"))
+                .charset(StandardCharsets.US_ASCII)
+                .asObject(RequestCapture.class)
+                .getBody()
+                .assertContentType("text/plain", "charset", "US-ASCII");
+    }
+
+    @Test
+    void setNoCharSetAfterBody() {
+        Unirest.post(MockServer.POST)
+                .body(new Foo("Orange"))
+                .noCharset()
+                .asObject(RequestCapture.class)
+                .getBody()
+                .assertContentType("text/plain");
+    }
+
+    @Test
+    void ifTheObjectMapperFailsReturnEmptyAndAddToParsingError() {
+        var request = Unirest.get(MockServer.INVALID_REQUEST)
+                .asObject(RequestCapture.class);
+
+        assertNull(request.getBody());
+        assertTrue(request.getParsingError().isPresent());
+        assertThat(request.getParsingError().get().getMessage())
+                .startsWith("kong.unirest.core.UnirestException: tools.jackson.core.exc.StreamReadException: " +
+                        "Unrecognized token 'You': was expecting (JSON String, Number, Array, Object or token 'null', 'true' or 'false')");
+        assertEquals("You did something bad", request.getParsingError().get().getOriginalBody());
+
+    }
+
+    @Test
+    void ifTheObjectMapperFailsReturnEmptyAndAddToParsingErrorObGenericTypes() {
+        var request = Unirest.get(MockServer.INVALID_REQUEST)
+                .asObject(new GenericType<RequestCapture>() {});
+
+        assertNull(request.getBody());
+        assertTrue(request.getParsingError().isPresent());
+        assertThat(request.getParsingError().get().getMessage())
+                .startsWith("kong.unirest.core.UnirestException: tools.jackson.core.exc.StreamReadException: " +
+                        "Unrecognized token 'You': was expecting (JSON String, Number, Array, Object or token 'null', 'true' or 'false')");
+        assertEquals("You did something bad", request.getParsingError().get().getOriginalBody());
+    }
+
+    @Test
+    void unirestExceptionsAreAlsoParseExceptions() {
+        var request = Unirest.get(MockServer.INVALID_REQUEST)
+                .asObject(new GenericType<RequestCapture>() {});
+
+        assertNull(request.getBody());
+        assertTrue(request.getParsingError().isPresent());
+        assertThat(request.getParsingError().get().getMessage())
+                .startsWith("kong.unirest.core.UnirestException: tools.jackson.core.exc.StreamReadException: " +
+                        "Unrecognized token 'You': was expecting (JSON String, Number, Array, Object or token 'null', 'true' or 'false')");
+        assertEquals("You did something bad", request.getParsingError().get().getOriginalBody());
+    }
+
+    @Test
+    void canSetObjectMapperToFailOnUnknown() {
+        var jack = JsonMapper.builderWithJackson2Defaults().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, true).build();
+
+        Unirest.config().setObjectMapper(new JacksonObjectMapper(jack));
+
+        MockServer.setStringResponse("{\"foo\": [1,2,3] }");
+
+        var error = Unirest.get(MockServer.GET)
+                .asObject(RequestCapture.class)
+                .mapError(Error.class);
+
+        assertEquals(Arrays.asList(1,2,3), error.foo);
+    }
+
+    @Test
+    void parsingExceptions() {
+        MockServer.setStringResponse("hi im not json");
+
+        var ex = Unirest.get(MockServer.ERROR_RESPONSE)
+                .asObject(SomeTestClass.class)
+                .getParsingError()
+                .get();
+
+        assertParsingError(ex);
+
+        var ex2 = Unirest.get(MockServer.ERROR_RESPONSE)
+                .asObject(new GenericType<SomeTestClass>() {})
+                .getParsingError()
+                .get();
+
+        assertParsingError(ex2);
+
+    }
+
+    private static void assertParsingError(UnirestParsingException e) {
+        assertThat(e)
+                .isInstanceOf(UnirestParsingException.class)
+                .hasMessage("kong.unirest.core.UnirestException: tools.jackson.core.exc.StreamReadException: Unrecognized token 'hi': was expecting (JSON String, Number, Array, Object or token 'null', 'true' or 'false')\n" +
+                        " at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); byte offset: #UNKNOWN]");
+    }
+
+    static class SomeTestClass {}
+
+    public static class Error {
+        public List<Integer> foo;
+    }
+
+    public static class TestingMapper implements ObjectMapper {
+        public boolean readWasCalled;
+        public boolean writeWasCalled;
+
+        @Override
+        public <T> T readValue(String value, Class<T> valueType) {
+            this.readWasCalled = true;
+            return new JacksonObjectMapper().readValue(value, valueType);
+        }
+
+        @Override
+        public String writeValue(Object value) {
+            writeWasCalled = true;
+            return new Gson().toJson(value);
+        }
+    }
+}

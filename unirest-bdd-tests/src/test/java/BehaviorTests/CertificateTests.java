@@ -1,0 +1,363 @@
+/**
+ * The MIT License
+ *
+ * Copyright for portions of unirest-java are held by Kong Inc (c) 2013.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files (the
+ * "Software"), to deal in the Software without restriction, including
+ * without limitation the rights to use, copy, modify, merge, publish,
+ * distribute, sublicense, and/or sell copies of the Software, and to
+ * permit persons to whom the Software is furnished to do so, subject to
+ * the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+ * LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+ * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+ * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
+package BehaviorTests;
+
+import kong.unirest.core.GetRequest;
+
+import kong.unirest.core.HttpResponse;
+import kong.unirest.core.Unirest;
+import kong.unirest.core.UnirestException;
+import kong.unirest.core.java.SSLContextBuilder;
+import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Test;
+
+import javax.net.ssl.*;
+
+import java.io.BufferedReader;
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.URL;
+import java.security.KeyStore;
+import java.security.SecureRandom;
+import java.security.cert.X509Certificate;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.fail;
+
+@Disabled // don't normally run these because they depend on badssl.com
+class CertificateTests extends BddTest {
+
+    public static final char[] PASSWORD = "badssl.com".toCharArray();
+
+    @Test
+    void canDoClientCertificates() throws Exception {
+        Unirest.config().clientCertificateStore(readStore(), "badssl.com");
+
+        Unirest.get("https://client.badssl.com/")
+                .asString()
+                .ifFailure(r -> fail(r.getStatus() + " request failed " + r.getBody()))
+                .ifSuccess(r -> System.out.println(" woot "));
+    }
+
+
+    @Test
+    void canLoadKeyStoreByPath() {
+        Unirest.config().clientCertificateStore("src/test/resources/certs/badssl.com-client.p12", "badssl.com");
+
+        Unirest.get("https://client.badssl.com/")
+                .asString()
+                .ifFailure(r -> fail(r.getStatus() + " request failed " + r.getBody()))
+                .ifSuccess(r -> System.out.println(" woot "));
+        ;
+    }
+
+    @Test
+    void loadWithSSLContext() throws Exception {
+        SSLContext sslContext = SSLContextBuilder.create()
+                .loadKeyMaterial(readStore(), "badssl.com".toCharArray()) // use null as second param if you don't have a separate key password
+                .build();
+
+        Unirest.config().sslContext(sslContext);
+
+        int response = Unirest.get("https://client.badssl.com/").asEmpty().getStatus();
+        assertEquals(200, response);
+    }
+
+    @Test
+    void loadWithSSLContextAndProtocol() throws Exception {
+        SSLContext sslContext = SSLContextBuilder.create()
+                .loadKeyMaterial(readStore(), "badssl.com".toCharArray()) // use null as second param if you don't have a separate key password
+                .build();
+
+        Unirest.config().sslContext(sslContext).protocols("TLSv1.2");
+
+        int response = Unirest.get("https://client.badssl.com/").asEmpty().getStatus();
+        assertEquals(200, response);
+    }
+
+    @Test
+    void loadWithSSLContextAndCipher() throws Exception {
+        SSLContext sslContext = SSLContextBuilder.create()
+                .loadKeyMaterial(readStore(), "badssl.com".toCharArray()) // use null as second param if you don't have a separate key password
+                .build();
+
+        Unirest.config().sslContext(sslContext).ciphers("TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384");
+
+        int response = Unirest.get("https://client.badssl.com/").asEmpty().getStatus();
+        assertEquals(200, response);
+    }
+
+    @Test
+    void loadWithSSLContextAndCipherAndProtocol() throws Exception {
+        SSLContext sslContext = SSLContextBuilder.create()
+                .loadKeyMaterial(readStore(), "badssl.com".toCharArray()) // use null as second param if you don't have a separate key password
+                .build();
+
+        Unirest.config()
+                .sslContext(sslContext)
+                .protocols("TLSv1.2")
+                .ciphers("TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384");
+
+        int response = Unirest.get("https://client.badssl.com/").asEmpty().getStatus();
+        assertEquals(200, response);
+    }
+
+    @Test
+    void sslHandshakeFailsWhenServerIsReceivingAnUnsupportedCipher() throws Exception {
+        SSLContext sslContext = SSLContextBuilder.create()
+                .loadKeyMaterial(readStore(), "badssl.com".toCharArray()) // use null as second param if you don't have a separate key password
+                .build();
+
+        Unirest.config()
+                .sslContext(sslContext)
+                .protocols("TLSv1.2")
+                .ciphers("TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256");
+
+        GetRequest request = Unirest.get("https://client.badssl.com/");
+        assertThrows(UnirestException.class, request::asEmpty);
+    }
+
+    @Test
+    void clientPreventsToUseUnsafeProtocol() throws Exception {
+        SSLContext sslContext = SSLContextBuilder.create()
+                .loadKeyMaterial(readStore(), "badssl.com".toCharArray()) // use null as second param if you don't have a separate key password
+                .build();
+
+        Unirest.config()
+                .sslContext(sslContext)
+                .protocols("SSLv3");
+
+
+        fails("https://client.badssl.com/",
+                SSLHandshakeException.class,
+                "javax.net.ssl.SSLHandshakeException: No appropriate protocol (protocol is disabled or cipher suites are inappropriate)");
+    }
+
+    @Test
+    void badName() {
+        fails("https://wrong.host.badssl.com/",
+                SSLHandshakeException.class,
+                "javax.net.ssl.SSLHandshakeException: No subject alternative DNS name matching wrong.host.badssl.com found.");
+        disableSsl();
+        canCall("https://wrong.host.badssl.com/");
+    }
+
+    @Test
+    void expired() {
+        fails("https://expired.badssl.com/",
+                SSLHandshakeException.class,
+                "javax.net.ssl.SSLHandshakeException: " +
+                        "PKIX path validation failed: " +
+                        "java.security.cert.CertPathValidatorException: " +
+                        "validity check failed");
+        disableSsl();
+        canCall("https://expired.badssl.com/");
+    }
+
+    @Test
+    public void whenSelfSignedFailes(){
+        fails("https://self-signed.badssl.com/",
+                SSLHandshakeException.class,
+                "javax.net.ssl.SSLHandshakeException: " +
+                        "PKIX path building failed: sun.security.provider.certpath.SunCertPathBuilderException: " +
+                        "unable to find valid certification path to requested target");
+
+    }
+
+    @Test
+    void selfSigned() throws Exception {
+        KeyStore ks = readStore();
+
+        KeyManagerFactory kmf = KeyManagerFactory.getInstance("SunX509");
+        kmf.init(ks, PASSWORD);
+
+        TrustManager[] trustAllCerts = new TrustManager[]{
+                new X509TrustManager() {
+                    public void checkClientTrusted(X509Certificate[] certs, String authType) {
+                    }
+
+                    public void checkServerTrusted(X509Certificate[] certs, String authType) {
+                    }
+
+                    public X509Certificate[] getAcceptedIssuers() {
+                        return new X509Certificate[0];
+                    }
+                }
+        };
+
+        var sslContext = SSLContext.getInstance("TLS");
+        sslContext.init(kmf.getKeyManagers(), trustAllCerts, new SecureRandom());
+
+        Unirest.config()
+                .sslContext(sslContext);
+
+        var result = Unirest.get("https://self-signed.badssl.com/").asString();
+
+        assertThat(result.getStatus()).isEqualTo(200);
+        assertThat(result.getBody()).contains("self-signed.<br>badssl.com");
+
+
+    }
+
+    @Test //issue
+    public void exampleWithoutJavaClient() throws Exception{
+
+        // Load the PKCS12 keystore
+        KeyStore keyStore = readStore();
+
+        // Init KeyManager with client certificate
+        KeyManagerFactory kmf = KeyManagerFactory.getInstance("SunX509");
+        kmf.init(keyStore, PASSWORD);
+
+        // Trust all server certs (like --insecure)
+        TrustManager[] trustAllCerts = new TrustManager[]{
+                new X509TrustManager() {
+                    public void checkClientTrusted(X509Certificate[] certs, String authType) {
+                    }
+
+                    public void checkServerTrusted(X509Certificate[] certs, String authType) {
+                    }
+
+                    public X509Certificate[] getAcceptedIssuers() {
+                        return new X509Certificate[0];
+                    }
+                }
+        };
+
+        // Init SSLContext with client cert + trust-all policy
+        SSLContext sc = SSLContext.getInstance("TLS");
+        sc.init(kmf.getKeyManagers(), trustAllCerts, new SecureRandom());
+
+        // Set default SSL socket factory
+        HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
+
+        // Disable hostname verification (like --insecure)
+        HttpsURLConnection.setDefaultHostnameVerifier((hostname, session) -> true);
+
+        // Open connection
+        URL url = new URL("https://self-signed.badssl.com/");
+        HttpsURLConnection con = (HttpsURLConnection) url.openConnection();
+        con.setRequestMethod("GET");
+
+        // Read response
+        int responseCode = con.getResponseCode();
+        String statusMessage = con.getResponseMessage();
+        System.out.println("Response Code: " + responseCode);
+        System.out.println("Status Message: " + statusMessage);
+
+        try (BufferedReader in = new BufferedReader(new InputStreamReader(con.getInputStream()))) {
+            String inputLine;
+            while ((inputLine = in.readLine()) != null) {
+                System.out.println(inputLine);
+            }
+        }
+
+        con.disconnect();
+    }
+
+    @Test
+    void selfSignedWorksIfDisabled() {
+        disableSsl();
+        canCall("https://self-signed.badssl.com/");
+    }
+
+    @Test
+    void badNameAsync() {
+        failsAsync("https://wrong.host.badssl.com/",
+                SSLHandshakeException.class,
+                "javax.net.ssl.SSLHandshakeException: " +
+                        "No subject alternative DNS name matching wrong.host.badssl.com found.");
+        disableSsl();
+        canCallAsync("https://wrong.host.badssl.com/");
+    }
+
+    @Test
+    void expiredAsync() {
+        failsAsync("https://expired.badssl.com/",
+                SSLHandshakeException.class,
+                "javax.net.ssl.SSLHandshakeException: PKIX path validation failed: java.security.cert.CertPathValidatorException: validity check failed");
+        disableSsl();
+        canCallAsync("https://expired.badssl.com/");
+    }
+
+    @Test
+    void selfSignedAsync() {
+        failsAsync("https://self-signed.badssl.com/",
+                SSLHandshakeException.class,
+                "javax.net.ssl.SSLHandshakeException: PKIX path building failed: sun.security.provider.certpath.SunCertPathBuilderException: " +
+                        "unable to find valid certification path to requested target");
+        disableSsl();
+        canCallAsync("https://self-signed.badssl.com/");
+    }
+
+    private void disableSsl() {
+        Unirest.config().reset().verifySsl(false);
+    }
+
+    private void failsAsync(String url, Class<? extends Throwable> exClass, String error) {
+        try {
+            var e = Unirest.get(url).asEmptyAsync().get().getParsingError().get().getCause().getCause();
+            if (!e.getCause().getClass().isAssignableFrom(exClass)) {
+                fail("Expected wrong exception type \n Expected: " + exClass + "\n but got " + e.getCause().getClass());
+            }
+            assertEquals(error, e.getMessage(), "Wrong Error Message");
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private void fails(String url, Class<? extends Throwable> exClass, String error) {
+        Exception e = assertThrows(Exception.class, () -> Unirest.get(url).asEmpty());
+        if (!e.getCause().getClass().isAssignableFrom(exClass)) {
+            fail("Expected wrong exception type \n Expected: " + exClass + "\n but got " + e.getCause().getClass());
+        }
+        assertEquals(error, e.getMessage(), "Wrong Error Message");
+    }
+
+    private void canCall(String url) {
+        assertEquals(200, Unirest.get(url).asEmpty().getStatus());
+    }
+
+    private void canCallAsync(String url) {
+        try {
+            assertEquals(200, Unirest.get(url).asEmptyAsync().get().getStatus());
+        } catch (Exception e) {
+            fail(e.getMessage());
+        }
+    }
+
+
+    public static KeyStore readStore() throws Exception {
+        try (InputStream keyStoreStream = TestUtil.class.getResourceAsStream("/certs/badssl.com-client.p12")) {
+            KeyStore keyStore = KeyStore.getInstance("PKCS12");
+            keyStore.load(keyStoreStream, PASSWORD);
+            return keyStore;
+        }
+    }
+}
